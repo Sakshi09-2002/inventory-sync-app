@@ -1,0 +1,144 @@
+{% schema %}
+{
+  "name": "Inventory Status",
+  "target": "section",
+  "templates": ["product"],
+  "settings": [
+    { "type": "product", "id": "product", "label": "Product", "autofill": true },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text Color",
+      "default": "#000000"
+    },
+    {
+      "type": "text",
+      "id": "loading_text",
+      "label": "Loading Text",
+      "default": "Loading inventory..."
+    }
+  ]
+}
+{% endschema %}
+
+<style>
+  .inventory-status-container {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    color: {{ block.settings.text_color }};
+  }
+  .inventory-location {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .inventory-location:last-child {
+    border-bottom: none;
+  }
+  .inventory-quantity {
+    font-weight: bold;
+  }
+  .inventory-error {
+    color: #ef4444;
+  }
+</style>
+
+<div class="inventory-status-container" id="inventory-status-{{ block.id }}">
+  <div class="inventory-content">{{ block.settings.loading_text }}</div>
+</div>
+
+<script>
+  (function() {
+    const blockId = '{{ block.id }}';
+    const container = document.getElementById(`inventory-status-${blockId}`);
+    const content = container.querySelector('.inventory-content');
+
+    // Retrieve initial variant
+    const getInitialVariant = () => {
+      // Method 1: URL parameter
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlVariant = urlParams.get('variant');
+      if (urlVariant) return urlVariant;
+
+      // Method 2: Global theme object (fallback)
+      if (window.meta && window.meta.product && window.meta.product.variants && window.meta.product.variants.length > 0) {
+         // Usually themes inject the selected or first available variant here, or just grab the first one
+         return window.meta.product.variants[0].id;
+      }
+
+      // Method 3: Parse from forms on page
+      const variantInput = document.querySelector('input[name="id"]');
+      if (variantInput) return variantInput.value;
+
+      return null;
+    };
+
+    const fetchInventory = async (variantId) => {
+      if (!variantId) {
+        content.innerHTML = 'Please select a variant.';
+        return;
+      }
+
+      content.innerHTML = '{{ block.settings.loading_text }}';
+
+      try {
+        const response = await fetch(`/apps/inventory-sync/inventory?variantId=${variantId}`);
+        if (!response.ok) {
+           throw new Error('Network response was not ok');
+        }
+        
+        const data = await response.json();
+        
+        if (data.inventoryLevels && data.inventoryLevels.length > 0) {
+          let html = '<h4>Availability by Location</h4>';
+          data.inventoryLevels.forEach(level => {
+            html += `
+              <div class="inventory-location">
+                <span>${level.locationName}</span>
+                <span class="inventory-quantity">${level.quantity} in stock</span>
+              </div>
+            `;
+          });
+          content.innerHTML = html;
+        } else {
+           content.innerHTML = '<p>No inventory information available for this variant.</p>';
+        }
+
+      } catch (error) {
+        console.error('Error fetching inventory:', error);
+        content.innerHTML = '<p class="inventory-error">Error loading inventory. Please try again later.</p>';
+      }
+    };
+
+    // 1. Initial Load
+    const initialVariantId = getInitialVariant();
+    fetchInventory(initialVariantId);
+
+    // 2. Listen for Variant Changes on the Page
+    // Approach A: Intercept URL changes (common in modern themes that use history.pushState when variants are changed)
+    let lastUrl = location.href; 
+    new MutationObserver(() => {
+      const url = location.href;
+      if (url !== lastUrl) {
+        lastUrl = url;
+        const newParams = new URLSearchParams(window.location.search);
+        const newVariantId = newParams.get('variant');
+        if (newVariantId && newVariantId !== initialVariantId) {
+             fetchInventory(newVariantId);
+        }
+      }
+    }).observe(document, {subtree: true, childList: true});
+
+    // Approach B: Listen for standard change events on input/select elements that change the variant
+    document.addEventListener('change', (event) => {
+        // Many themes update the name="id" input when options change
+        if (event.target && event.target.name === 'id') {
+             fetchInventory(event.target.value);
+        }
+    });
+
+  })();
+</script>
