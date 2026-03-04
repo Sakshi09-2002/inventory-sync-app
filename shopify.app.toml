@@ -12,8 +12,8 @@ automatically_update_urls_on_dev = true
 api_version = "2026-04"
 
   [[webhooks.subscriptions]]
-  topics = [ "app/uninstalled" ]
-  uri = "/webhooks/app/uninstalled"
+  topics = [ "inventory_levels/update" ]
+  uri = "/webhooks/inventory-update"
 
   [[webhooks.subscriptions]]
   topics = [ "app/scopes_update" ]
