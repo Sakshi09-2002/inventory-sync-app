@@ -47,98 +47,93 @@
 </style>
 
 <div class="inventory-status-container" id="inventory-status-{{ block.id }}">
-  <div class="inventory-content">{{ block.settings.loading_text }}</div>
+  <div class="inventory-header">
+    <label for="location-select-{{ block.id }}">Available at:</label>
+    <select id="location-select-{{ block.id }}" class="location-dropdown">
+      <option value="">Select a location</option>
+    </select>
+  </div>
+  <div class="inventory-content" style="margin-top: 10px; font-size: 0.9em;"></div>
 </div>
 
 <script>
   (function() {
     const blockId = '{{ block.id }}';
     const container = document.getElementById(`inventory-status-${blockId}`);
+    const select = document.getElementById(`location-select-${blockId}`);
     const content = container.querySelector('.inventory-content');
+    const productId = '{{ product.id }}';
+    
+    let variantMapping = {};
 
-    // Retrieve initial variant
-    const getInitialVariant = () => {
-      // Method 1: URL parameter
-      const urlParams = new URLSearchParams(window.location.search);
-      const urlVariant = urlParams.get('variant');
-      if (urlVariant) return urlVariant;
-
-      // Method 2: Global theme object (fallback)
-      if (window.meta && window.meta.product && window.meta.product.variants && window.meta.product.variants.length > 0) {
-         // Usually themes inject the selected or first available variant here, or just grab the first one
-         return window.meta.product.variants[0].id;
+    const fetchAllInventory = async () => {
+      content.innerHTML = '{{ block.settings.loading_text }}';
+      try {
+        const response = await fetch(`/apps/inventory-sync/inventory?productId=${productId}`);
+        if (!response.ok) throw new Error('Network response was not ok');
+        
+        const data = await response.json();
+        variantMapping = data.variantMapping;
+        populateDropdown();
+      } catch (error) {
+        console.error('Error fetching inventory:', error);
+        content.innerHTML = '<p class="inventory-error">Error loading inventory.</p>';
       }
-
-      // Method 3: Parse from forms on page
-      const variantInput = document.querySelector('input[name="id"]');
-      if (variantInput) return variantInput.value;
-
-      return null;
     };
 
-    const fetchInventory = async (variantId) => {
-      if (!variantId) {
-        content.innerHTML = 'Please select a variant.';
+    const populateDropdown = () => {
+      const locationMap = new Map();
+
+      // Collect all unique locations that have stock in AT LEAST one variant
+      for (const variantId in variantMapping) {
+        variantMapping[variantId].forEach(level => {
+          if (level.available > 0) {
+            if (!locationMap.has(level.locationName)) {
+              locationMap.set(level.locationName, {
+                name: level.locationName,
+                variantId: variantId,
+                available: level.available
+              });
+            }
+          }
+        });
+      }
+
+      if (locationMap.size === 0) {
+        content.innerHTML = '<p>No stock available at any location.</p>';
+        select.style.display = 'none';
         return;
       }
 
-      content.innerHTML = '{{ block.settings.loading_text }}';
-
-      try {
-        const response = await fetch(`/apps/inventory-sync/inventory?variantId=${variantId}`);
-        if (!response.ok) {
-           throw new Error('Network response was not ok');
-        }
-        
-        const data = await response.json();
-        
-        if (data.inventoryLevels && data.inventoryLevels.length > 0) {
-          let html = '<h4>Availability by Location</h4>';
-          data.inventoryLevels.forEach(level => {
-            html += `
-              <div class="inventory-location">
-                <span>${level.locationName}</span>
-                <span class="inventory-quantity">${level.quantity} in stock</span>
-              </div>
-            `;
-          });
-          content.innerHTML = html;
-        } else {
-           content.innerHTML = '<p>No inventory information available for this variant.</p>';
-        }
-
-      } catch (error) {
-        console.error('Error fetching inventory:', error);
-        content.innerHTML = '<p class="inventory-error">Error loading inventory. Please try again later.</p>';
-      }
+      locationMap.forEach((loc, name) => {
+        const option = document.createElement('option');
+        option.value = loc.variantId;
+        option.textContent = name;
+        select.appendChild(option);
+      });
     };
 
-    // 1. Initial Load
-    const initialVariantId = getInitialVariant();
-    fetchInventory(initialVariantId);
-
-    // 2. Listen for Variant Changes on the Page
-    // Approach A: Intercept URL changes (common in modern themes that use history.pushState when variants are changed)
-    let lastUrl = location.href; 
-    new MutationObserver(() => {
-      const url = location.href;
-      if (url !== lastUrl) {
-        lastUrl = url;
-        const newParams = new URLSearchParams(window.location.search);
-        const newVariantId = newParams.get('variant');
-        if (newVariantId && newVariantId !== initialVariantId) {
-             fetchInventory(newVariantId);
-        }
+    select.addEventListener('change', (e) => {
+      const variantId = e.target.value;
+      if (!variantId) {
+        content.innerHTML = '';
+        return;
       }
-    }).observe(document, {subtree: true, childList: true});
 
-    // Approach B: Listen for standard change events on input/select elements that change the variant
-    document.addEventListener('change', (event) => {
-        // Many themes update the name="id" input when options change
-        if (event.target && event.target.name === 'id') {
-             fetchInventory(event.target.value);
-        }
+      // Convert GID to numeric ID for URL if needed, but Shopify handles both usually
+      const numericId = variantId.split('/').pop();
+      const url = new URL(window.location.href);
+      url.searchParams.set('variant', numericId);
+      
+      // Update content to show stock for selected location
+      const selectedLocName = e.target.options[e.target.selectedIndex].text;
+      const stock = variantMapping[variantId].find(l => l.locationName === selectedLocName)?.available;
+      content.innerHTML = `<strong>${stock}</strong> available at this location. Redirecting...`;
+
+      // Redirect
+      window.location.href = url.toString();
     });
 
+    fetchAllInventory();
   })();
 </script>
