@@ -31,6 +31,6 @@ scopes = "read_discounts_allocator_functions,write_discounts_allocator_functions
 redirect_urls = [ "https://example.com/api/auth" ]
 
 [app_proxy]
-url = "https://example.com/api/proxy"
+url = "https://example.com"
 subpath = "inventory-sync"
 prefix = "apps"
