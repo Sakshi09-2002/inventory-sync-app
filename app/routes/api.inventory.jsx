@@ -2,14 +2,16 @@ import { json } from "@remix-run/node";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }) => {
+  console.log("DEBUG: Proxy request received for inventory");
+  const url = new URL(request.url);
+  const productId = url.searchParams.get("productId");
+  console.log("DEBUG: productId =", productId);
+
   const { admin } = await authenticate.public.appProxy(request);
 
   if (!admin) {
     return json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  const url = new URL(request.url);
-  const productId = url.searchParams.get("productId");
 
   if (!productId) {
     return json({ error: "Missing productId" }, { status: 400 });
