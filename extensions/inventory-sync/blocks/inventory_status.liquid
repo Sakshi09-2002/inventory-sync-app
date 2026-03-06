@@ -1,139 +1,123 @@
-{% schema %}
-{
-  "name": "Inventory Status",
-  "target": "section",
-  "templates": ["product"],
-  "settings": [
-    { "type": "product", "id": "product", "label": "Product", "autofill": true },
-    {
-      "type": "color",
-      "id": "text_color",
-      "label": "Text Color",
-      "default": "#000000"
-    },
-    {
-      "type": "text",
-      "id": "loading_text",
-      "label": "Loading Text",
-      "default": "Loading inventory..."
-    }
-  ]
-}
-{% endschema %}
-
-<style>
-  .inventory-status-container {
-    margin: 1.5rem 0;
-    padding: 1rem;
-    border: 1px solid #e2e8f0;
-    border-radius: 0.5rem;
-    color: {{ block.settings.text_color }};
-  }
-  .inventory-location {
-    display: flex;
-    justify-content: space-between;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid #f1f5f9;
-  }
-  .inventory-location:last-child {
-    border-bottom: none;
-  }
-  .inventory-quantity {
-    font-weight: bold;
-  }
-  .inventory-error {
-    color: #ef4444;
-  }
-</style>
-
 <div class="inventory-status-container" id="inventory-status-{{ block.id }}">
-  <div class="inventory-header">
-    <label for="location-select-{{ block.id }}">Available at:</label>
-    <select id="location-select-{{ block.id }}" class="location-dropdown">
-      <option value="">Select a location</option>
-    </select>
+  <h4 style="margin-bottom: 10px;">Available at:</h4>
+  <div id="inventory-locations-{{ block.id }}" class="inventory-locations">
+    {% comment %} Content populated by JS {% endcomment %}
+    <p class="inventory-loading">Checking availability...</p>
   </div>
-  <div class="inventory-content" style="margin-top: 10px; font-size: 0.9em;"></div>
 </div>
 
 <script>
   (function() {
     const blockId = '{{ block.id }}';
-    const container = document.getElementById(`inventory-status-${blockId}`);
-    const select = document.getElementById(`location-select-${blockId}`);
-    const content = container.querySelector('.inventory-content');
-    const productId = '{{ product.id }}';
+    const container = document.getElementById(`inventory-locations-${blockId}`);
     
-    let variantMapping = {};
+    // Store all location tags for this product in a JS-accessible format
+    const allLocationTags = [
+      {% for tag in product.tags %}
+        {% if tag contains 'loc_' %}
+          "{{ tag }}"{% unless forloop.last %},{% endunless %}
+        {% endif %}
+      {% endfor %}
+    ];
 
-    const fetchAllInventory = async () => {
-      content.innerHTML = '{{ block.settings.loading_text }}';
-      try {
-        const response = await fetch(`/apps/inventory-sync/inventory?productId=${productId}`);
-        if (!response.ok) throw new Error('Network response was not ok');
-        
-        const data = await response.json();
-        variantMapping = data.variantMapping;
-        populateDropdown();
-      } catch (error) {
-        console.error('Error fetching inventory:', error);
-        content.innerHTML = '<p class="inventory-error">Error loading inventory.</p>';
-      }
-    };
-
-    const populateDropdown = () => {
-      const locationMap = new Map();
-
-      // Collect all unique locations that have stock in AT LEAST one variant
-      for (const variantId in variantMapping) {
-        variantMapping[variantId].forEach(level => {
-          if (level.available > 0) {
-            if (!locationMap.has(level.locationName)) {
-              locationMap.set(level.locationName, {
-                name: level.locationName,
-                variantId: variantId,
-                available: level.available
-              });
-            }
-          }
-        });
-      }
-
-      if (locationMap.size === 0) {
-        content.innerHTML = '<p>No stock available at any location.</p>';
-        select.style.display = 'none';
-        return;
-      }
-
-      locationMap.forEach((loc, name) => {
-        const option = document.createElement('option');
-        option.value = loc.variantId;
-        option.textContent = name;
-        select.appendChild(option);
-      });
-    };
-
-    select.addEventListener('change', (e) => {
-      const variantId = e.target.value;
-      if (!variantId) {
-        content.innerHTML = '';
-        return;
-      }
-
-      // Convert GID to numeric ID for URL if needed, but Shopify handles both usually
-      const numericId = variantId.split('/').pop();
-      const url = new URL(window.location.href);
-      url.searchParams.set('variant', numericId);
+    const updateLocations = () => {
+      // 1. Get current variant ID from URL or default
+      const urlParams = new URLSearchParams(window.location.search);
+      let currentVariantId = urlParams.get('variant');
       
-      // Update content to show stock for selected location
-      const selectedLocName = e.target.options[e.target.selectedIndex].text;
-      const stock = variantMapping[variantId].find(l => l.locationName === selectedLocName)?.available;
-      content.innerHTML = `<strong>${stock}</strong> available at this location. Redirecting...`;
+      if (!currentVariantId) {
+        // Fallback to Liquid's initial variant if no URL param
+        currentVariantId = "{{ product.selected_or_first_available_variant.id }}";
+      }
 
-      // Redirect
-      window.location.href = url.toString();
+      // Ensure we have a clean numeric ID for comparison
+      const cleanVariantId = currentVariantId.toString().split('/').pop();
+
+      // 2. Filter tags that match the current variant
+      // Tags are formatted as: loc_locationname_variantid
+      const matchingTags = allLocationTags.filter(tag => {
+        const parts = tag.split('_');
+        const tagVariantId = parts[parts.length - 1];
+        return tagVariantId === cleanVariantId;
+      });
+
+      // 3. Render
+      if (matchingTags.length === 0) {
+        container.innerHTML = '<p class="inventory-none">No stock available for this variant at any location.</p>';
+        return;
+      }
+
+      const html = matchingTags.map(tag => {
+        // Extract location name from tag (between first 'loc_' and last '_variantid')
+        const parts = tag.split('_');
+        const locationPart = parts.slice(1, -1).join(' ');
+        const locationName = locationPart.charAt(0).toUpperCase() + locationPart.slice(1);
+        
+        return `
+          <div class="inventory-location">
+            <span class="location-dot"></span>
+            ${locationName}
+          </div>
+        `;
+      }).join('');
+
+      container.innerHTML = html;
+    };
+
+    // Run on load
+    updateLocations();
+
+    // Listen for URL changes (Shopify themes often update URL without full reload)
+    window.addEventListener('popstate', updateLocations);
+    
+    // Some themes use custom events or AJAX for variant changes
+    // We can also poll frequently if needed, or hook into common theme events
+    const observer = new MutationObserver(() => {
+        updateLocations();
     });
-
-    fetchAllInventory();
+    
+    // Observe the URL for changes if needed, or simply re-check every few seconds as a fallback
+    setInterval(updateLocations, 2000); 
   })();
 </script>
+
+<style>
+  .inventory-status-container {
+    margin: 1.5rem 0;
+    padding: 1.2rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.8rem;
+    background: #f8fafc;
+    color: {{ block.settings.text_color }};
+  }
+  .inventory-locations {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .inventory-location {
+    display: flex;
+    align-items: center;
+    font-weight: 500;
+  }
+  .location-dot {
+    width: 8px;
+    height: 8px;
+    background: #22c55e;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 10px;
+  }
+  .inventory-none, .inventory-loading {
+    color: #64748b;
+    font-style: italic;
+    font-size: 0.9em;
+  }
+</style>
+{% schema %}
+{
+  "name": "Inventory Status",
+  "target": "section",
+  "settings": []
+}
+{% endschema %}

@@ -1,125 +1,135 @@
-import { json } from "@remix-run/node";
-import { authenticate } from "../shopify.server";
+// export const action = async ({ request }) => {
+
+//   const payload = await request.json();
+//   const { inventory_item_id } = payload;
+
+//   const admin = await shopify.authenticate.admin(request);
+
+//   // 1️⃣ Get variant → product
+//   const variantQuery = `
+//   query {
+//     inventoryItem(id: "gid://shopify/InventoryItem/${inventory_item_id}") {
+//       variant {
+//         product {
+//           id
+//           tags
+//         }
+//       }
+//     }
+//   }`;
+
+//   const variantRes = await admin.graphql(variantQuery);
+//   const variantData = await variantRes.json();
+
+//   const productId = variantData.data.inventoryItem.variant.product.id;
+//   const productTags = variantData.data.inventoryItem.variant.product.tags;
+
+//   // 2️⃣ Fetch all variants inventory
+//   const inventoryQuery = `
+//   query {
+//     product(id: "${productId}") {
+//       variants(first: 100) {
+//         edges {
+//           node {
+//             inventoryItem {
+//               inventoryLevels(first: 20) {
+//                 edges {
+//                   node {
+//                     available
+//                     location {
+//                       name
+//                     }
+//                   }
+//                 }
+//               }
+//             }
+//           }
+//         }
+//       }
+//     }
+//   }`;
+
+//   const inventoryRes = await admin.graphql(inventoryQuery);
+//   const inventoryData = await inventoryRes.json();
+
+//   const variants = inventoryData.data.product.variants.edges.map(e => {
+//     return {
+//       inventoryLevels: e.node.inventoryItem.inventoryLevels.edges.map(l => l.node)
+//     };
+//   });
+
+//   // ⭐ HERE ADD YOUR LOGIC
+
+//   let activeLocations = new Set();
+
+//   variants.forEach(v => {
+//     v.inventoryLevels.forEach(level => {
+//       if (level.available > 0) {
+//         //activeLocations.add(`loc_${level.location.name}`);
+//         const tag = "loc_" + level.location.name
+//           .toLowerCase()
+//           .replace(/\s+/g, "_");
+
+//         activeLocations.add(tag);
+//       }
+//     });
+//   });
+
+//   let existingTags = productTags.split(",");
+
+//   let cleanTags = existingTags.filter(tag => !tag.startsWith("loc_"));
+
+//   let finalTags = [...cleanTags, ...activeLocations];
+
+//   // 3️⃣ Update product tags
+//   const mutation = `
+//   mutation {
+//     productUpdate(input: {
+//       id: "${productId}",
+//       tags: ${JSON.stringify(finalTags)}
+//     }) {
+//       product {
+//         id
+//       }
+//     }
+//   }`;
+
+//   await admin.graphql(mutation);
+
+//   return new Response("ok");
+// };
+
+import { addToQueue } from "../queue/productQueue";
 
 export const action = async ({ request }) => {
-  try {
-    const { admin } = await authenticate.webhook(request);
 
-    const body = await request.json();
-    const inventoryItemId = body.inventory_item_id;
+  const payload = await request.json();
 
-    if (!inventoryItemId) {
-      console.log("No inventory_item_id received");
-      return json({ success: false });
-    }
+  const inventoryItemId = payload.inventory_item_id;
 
-    // 1️⃣ Fetch product + all variants inventory
-    const response = await admin.graphql(`
-      query {
-        inventoryItem(id: "gid://shopify/InventoryItem/${inventoryItemId}") {
-          variant {
-            product {
-              id
-              tags
-              variants(first: 100) {
-                edges {
-                  node {
-                    inventoryItem {
-                      id
-                      inventoryLevels(first: 20) {
-                        edges {
-                          node {
-                            available
-                            location {
-                              id
-                              name
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
+  const admin = await shopify.authenticate.admin(request);
+
+  const query = `
+  query {
+    inventoryItem(id: "gid://shopify/InventoryItem/${inventoryItemId}") {
+      variant {
+        product {
+          id
         }
       }
-    `);
-
-    const data = await response.json();
-
-    if (!data?.data?.inventoryItem?.variant?.product) {
-      console.log("Product not found for inventory item");
-      return json({ success: false });
     }
+  }`;
 
-    const product = data.data.inventoryItem.variant.product;
+  const res = await admin.graphql(query);
+  const data = await res.json();
 
-    // 2️⃣ Calculate location availability
-    const locationStock = {};
+  const productId =
+    data.data.inventoryItem.variant.product.id;
 
-    product.variants.edges.forEach((variant) => {
-      const levels = variant.node.inventoryItem?.inventoryLevels?.edges || [];
-
-      levels.forEach((level) => {
-        const qty = level.node.available;
-        const locationName = level.node.location.name;
-
-        if (qty > 0) {
-          locationStock[locationName] = true;
-        }
-      });
-    });
-
-    // 3️⃣ Convert locations → tags
-    const locationTags = Object.keys(locationStock).map((loc) =>
-      `loc_${loc.replace(/\s+/g, "_").toLowerCase()}`
-    );
-
-    // 4️⃣ Existing product tags
-    const existingTags = product.tags
-      ? product.tags.split(",").map((t) => t.trim())
-      : [];
-
-    // 5️⃣ Remove old location tags
-    const nonLocationTags = existingTags.filter(
-      (tag) => !tag.startsWith("loc_")
-    );
-
-    // 6️⃣ Final tag list
-    const updatedTags = [...nonLocationTags, ...locationTags];
-
-    // 7️⃣ Only update if tags changed
-    const existingTagString = existingTags.sort().join(",");
-    const updatedTagString = updatedTags.sort().join(",");
-
-    if (existingTagString === updatedTagString) {
-      console.log("No tag changes needed");
-      return json({ success: true });
-    }
-
-    // 8️⃣ Update product tags
-    await admin.graphql(`
-      mutation productUpdate {
-        productUpdate(input:{
-          id:"${product.id}"
-          tags:${JSON.stringify(updatedTags)}
-        }){
-          product{
-            id
-            tags
-          }
-        }
-      }
-    `);
-
-    console.log("Product tags updated:", updatedTags);
-
-    return json({ success: true });
-
-  } catch (error) {
-    console.error("Webhook error:", error);
-    return json({ success: false });
-  }
+  addToQueue(productId);
+  setTimeout(async () => {
+    const admin = await shopify.authenticate.admin(request);
+    await processQueue(admin);
+  }, 2000);
+  return new Response("queued");
 };
