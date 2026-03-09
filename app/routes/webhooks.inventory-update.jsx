@@ -99,15 +99,19 @@
 //   return new Response("ok");
 // };
 
+import { authenticate } from "../shopify.server";
 import { addToQueue } from "../queue/productQueue";
+import { processQueue } from "../services/inventoryTagService";
 
 export const action = async ({ request }) => {
 
-  const payload = await request.json();
+  const { admin, payload } = await authenticate.webhook(request);
+
+  if (!admin) {
+    return new Response();
+  }
 
   const inventoryItemId = payload.inventory_item_id;
-
-  const admin = await shopify.authenticate.admin(request);
 
   const query = `
   query {
@@ -127,9 +131,10 @@ export const action = async ({ request }) => {
     data.data.inventoryItem.variant.product.id;
 
   addToQueue(productId);
-  setTimeout(async () => {
-    const admin = await shopify.authenticate.admin(request);
-    await processQueue(admin);
-  }, 2000);
-  return new Response("queued");
+
+  // Directly process the queue to ensure updates happen promptly
+  // while still using the queue to deduplicate rapid changes
+  await processQueue(admin);
+
+  return new Response("ok");
 };

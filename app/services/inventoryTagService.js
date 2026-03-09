@@ -2,21 +2,21 @@ import { getQueue, clearQueue } from "../queue/productQueue";
 
 export async function processQueue(admin) {
 
-    const productIds = getQueue();
+  const productIds = getQueue();
 
-    if (!productIds.length) return;
+  if (!productIds.length) return;
 
-    for (const productId of productIds) {
+  for (const productId of productIds) {
 
-        await updateProductTags(admin, productId);
+    await updateProductTags(admin, productId);
 
-    }
+  }
 
-    clearQueue();
+  clearQueue();
 }
 async function updateProductTags(admin, productId) {
 
-    const query = `
+  const query = `
   query {
     product(id: "${productId}") {
       tags
@@ -34,6 +34,9 @@ async function updateProductTags(admin, productId) {
                   }
                 }
               }
+              variant {
+                id
+              }
             }
           }
         }
@@ -41,72 +44,65 @@ async function updateProductTags(admin, productId) {
     }
   }`;
 
-    const res = await admin.graphql(query);
-    const data = await res.json();
+  const res = await admin.graphql(query);
+  const data = await res.json();
 
-    const product = data.data.product;
+  const product = data.data.product;
 
-    let activeLocations = new Set();
+  let activeLocations = new Set();
 
-    product.variants.edges.forEach(v => {
+  product.variants.edges.forEach(v => {
 
-        v.node.inventoryItem.inventoryLevels.edges.forEach(level => {
+    v.node.inventoryItem.inventoryLevels.edges.forEach(level => {
 
-            if (level.node.available > 0) {
+      if (level.node.available > 0) {
 
-                const tag = "loc_" +
-                    level.node.location.name
-                        .toLowerCase()
-                        .replace(/\s+/g, "_");
+        const locationTag = level.node.location.name
+          .toLowerCase()
+          .replace(/\s+/g, "_");
 
-                activeLocations.add(tag);
+        const variantId = v.node.inventoryItem.variant.id.split("/").pop();
 
-            }
+        const tag = `loc_${locationTag}_${variantId}`;
 
-        });
+        activeLocations.add(tag);
+
+      }
 
     });
 
-    let existingTags = product.tags;
+  });
 
-    let cleanTags = existingTags.filter(
-        tag => !tag.startsWith("loc_")
-    );
+  let existingTagsArray = typeof product.tags === 'string' ? product.tags.split(",").map(t => t.trim()) : (Array.isArray(product.tags) ? product.tags : []);
 
-    let finalTags = [...cleanTags, ...activeLocations];
+  let cleanTags = existingTagsArray.filter(
+    tag => !tag.startsWith("loc_")
+  );
 
-    // ⭐ ADD CHECK HERE
-    if (JSON.stringify(finalTags.sort()) !== JSON.stringify(existingTags.sort())) {
+  let finalTags = [...new Set([...cleanTags, ...activeLocations])];
 
-        const mutation = `
-    mutation {
-        productUpdate(input:{
-        id:"${productId}"
-        tags:${JSON.stringify(finalTags)}
-        }){
-        product{ id }
+  // ⭐ Compare sorted tags to avoid redundant API calls
+  if (JSON.stringify([...finalTags].sort()) !== JSON.stringify([...existingTagsArray].sort())) {
+
+    const mutation = `
+    mutation productUpdate($input: ProductInput!) {
+        productUpdate(input: $input) {
+            product { id tags }
         }
     }`;
 
-        await admin.graphql(mutation);
+    await admin.graphql(mutation, {
+      variables: {
+        input: {
+          id: productId,
+          tags: finalTags
+        }
+      }
+    });
 
-        console.log("Product tags updated:", productId);
+    console.log("Product tags updated:", productId, finalTags);
 
-    } else {
-
-        console.log("No tag change, skipping update");
-
-    }
-
-    const mutation = `
-  mutation {
-    productUpdate(input:{
-      id:"${productId}"
-      tags:${JSON.stringify(finalTags)}
-    }){
-      product{ id }
-    }
-  }`;
-
-    await admin.graphql(mutation);
+  } else {
+    console.log("No tag change, skipping update for:", productId);
+  }
 }
