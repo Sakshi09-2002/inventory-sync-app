@@ -99,17 +99,39 @@
 //   return new Response("ok");
 // };
 
-import { authenticate } from "../shopify.server";
+import { authenticate, unauthenticated } from "../shopify.server";
 import { addToQueue } from "../queue/productQueue";
 import { processQueue } from "../services/inventoryTagService";
+import fs from "fs";
+import path from "path";
+
+const LOG_FILE = path.join(process.cwd(), "webhook_debug.log");
+
+function logDebug(message) {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${message}\n`;
+  fs.appendFileSync(LOG_FILE, logMessage);
+  console.log(message);
+}
 
 export const action = async ({ request }) => {
+  logDebug("Inventory webhook received");
 
-  const { admin, payload } = await authenticate.webhook(request);
+  const { admin: webhookAdmin, payload, shop } = await authenticate.webhook(request);
+
+  let admin = webhookAdmin;
+  if (!admin && shop) {
+    logDebug(`Admin client missing in webhook auth, attempting unauthenticated fallback for ${shop}`);
+    const results = await unauthenticated.admin(shop);
+    admin = results.admin;
+  }
 
   if (!admin) {
-    return new Response();
+    logDebug("CRITICAL: Failed to obtain admin client for webhook");
+    return new Response("Unauthorized", { status: 401 });
   }
+
+  logDebug(`Processing payload for item: ${payload.inventory_item_id}`);
 
   const inventoryItemId = payload.inventory_item_id;
 
@@ -127,14 +149,18 @@ export const action = async ({ request }) => {
   const res = await admin.graphql(query);
   const data = await res.json();
 
-  const productId =
-    data.data.inventoryItem.variant.product.id;
+  if (!data?.data?.inventoryItem) {
+    logDebug(`ERR: Inventory item ${inventoryItemId} not found or query failed. Errors: ${JSON.stringify(data.errors)}`);
+    return new Response("Not Found", { status: 404 });
+  }
+
+  const productId = data.data.inventoryItem.variant.product.id;
+  logDebug(`Found Product ID: ${productId}`);
 
   addToQueue(productId);
 
-  // Directly process the queue to ensure updates happen promptly
-  // while still using the queue to deduplicate rapid changes
   await processQueue(admin);
 
+  logDebug(`Successfully processed inventory update for ${productId}`);
   return new Response("ok");
 };

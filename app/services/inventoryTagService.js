@@ -1,18 +1,21 @@
 import { getQueue, clearQueue } from "../queue/productQueue";
 
 export async function processQueue(admin) {
-
   const productIds = getQueue();
+  console.log("ProcessQueue triggered for product IDs:", productIds);
 
-  if (!productIds.length) return;
+  if (!productIds.length) {
+    console.log("ProcessQueue: No product IDs in queue, skipping.");
+    return;
+  }
 
   for (const productId of productIds) {
-
+    console.log("ProcessQueue: Updating tags for product", productId);
     await updateProductTags(admin, productId);
-
   }
 
   clearQueue();
+  console.log("ProcessQueue: Finished processing and cleared queue.");
 }
 async function updateProductTags(admin, productId) {
 
@@ -47,7 +50,13 @@ async function updateProductTags(admin, productId) {
   const res = await admin.graphql(query);
   const data = await res.json();
 
+  if (!data?.data?.product) {
+    console.error("updateProductTags: Product not found for ID", productId);
+    return;
+  }
+
   const product = data.data.product;
+  console.log("updateProductTags: Current product tags:", product.tags);
 
   let activeLocations = new Set();
 
